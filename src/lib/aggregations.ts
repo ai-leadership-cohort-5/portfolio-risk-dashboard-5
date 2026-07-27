@@ -316,3 +316,133 @@ export function buildRationale(customer: ScoredCustomer): string {
 }
 
 export { RISK_THRESHOLDS };
+
+// ---------------------------------------------------------------------------
+// Exposure and count by industry broken down by RAG status
+// ---------------------------------------------------------------------------
+
+export interface IndustryRagExposure {
+  industry: string;
+  Green: number;
+  Amber: number;
+  Red: number;
+  total: number;
+  greenCount: number;
+  amberCount: number;
+  redCount: number;
+  totalCount: number;
+}
+
+export function exposureByIndustryByRag(customers: ScoredCustomer[]): IndustryRagExposure[] {
+  const map = new Map<string, IndustryRagExposure>();
+  for (const c of customers) {
+    let row = map.get(c.industrySector);
+    if (!row) {
+      row = {
+        industry: c.industrySector,
+        Green: 0, Amber: 0, Red: 0, total: 0,
+        greenCount: 0, amberCount: 0, redCount: 0, totalCount: 0,
+      };
+      map.set(c.industrySector, row);
+    }
+    row[c.category] += c.loanBalance;
+    row.total += c.loanBalance;
+    if (c.category === "Green") row.greenCount += 1;
+    else if (c.category === "Amber") row.amberCount += 1;
+    else row.redCount += 1;
+    row.totalCount += 1;
+  }
+  return Array.from(map.values()).sort((a, b) => b.total - a.total);
+}
+
+// ---------------------------------------------------------------------------
+// Per-customer recommended action (for Top 10)
+// ---------------------------------------------------------------------------
+
+export function customerAction(
+  customer: ScoredCustomer,
+  migration: MigrationResult,
+  breaches: PolicyBreach[]
+): string {
+  const CATEGORY_RANK_LOCAL: Record<RiskCategory, number> = { Green: 0, Amber: 1, Red: 2 };
+  const deterioratedIds = new Set<string>();
+  for (const t of migration.transitions) {
+    if (CATEGORY_RANK_LOCAL[t.to] > CATEGORY_RANK_LOCAL[t.from]) {
+      for (const c of t.customers) deterioratedIds.add(c.customerId);
+    }
+  }
+
+  if (deterioratedIds.has(customer.customerId)) {
+    return "Escalate — risk band worsened since last review; contact RM now.";
+  }
+  if (breaches.some((b) => b.affectedCustomerIds.includes(customer.customerId))) {
+    return "Address policy breach — remediate the tripped clause before renewal.";
+  }
+  if (customer.category === "Red") {
+    return "Immediate review — schedule RM contact within 3 business days.";
+  }
+  if (customer.category === "Amber") {
+    return "Add to watchlist — monitor repayment and reassess next cycle.";
+  }
+  return "Maintain — within appetite, no action required.";
+}
+
+// ---------------------------------------------------------------------------
+// Emerging / early-warning signals (for Emerging Trends)
+// ---------------------------------------------------------------------------
+
+export interface EmergingSignal {
+  customerId: string;
+  customerName: string;
+  industrySector: string;
+  category: RiskCategory;
+  riskScore: number;
+  loanBalance: number;
+  signal: string;
+  severity: "high" | "medium";
+}
+
+export function emergingSignals(
+  customers: ScoredCustomer[],
+  migration: MigrationResult
+): EmergingSignal[] {
+  const CATEGORY_RANK_LOCAL: Record<RiskCategory, number> = { Green: 0, Amber: 1, Red: 2 };
+  const deterioratedIds = new Set<string>();
+  for (const t of migration.transitions) {
+    if (CATEGORY_RANK_LOCAL[t.to] > CATEGORY_RANK_LOCAL[t.from]) {
+      for (const c of t.customers) deterioratedIds.add(c.customerId);
+    }
+  }
+
+  const signals: EmergingSignal[] = [];
+  for (const c of customers) {
+    const reasons: string[] = [];
+    let severity: "high" | "medium" = "medium";
+
+    if (c.repaymentRiskFactor >= 75) {
+      reasons.push(`repayment status "${c.repaymentStatus}" (advanced arrears)`);
+      severity = "high";
+    } else if (c.repaymentRiskFactor >= 55) {
+      reasons.push(`repayment status "${c.repaymentStatus}" (early arrears)`);
+    }
+
+    if (deterioratedIds.has(c.customerId)) {
+      reasons.push("risk band worsened since last snapshot");
+      severity = "high";
+    }
+
+    if (reasons.length > 0) {
+      signals.push({
+        customerId: c.customerId,
+        customerName: c.customerName,
+        industrySector: c.industrySector,
+        category: c.category,
+        riskScore: c.riskScore,
+        loanBalance: c.loanBalance,
+        signal: reasons.join("; "),
+        severity,
+      });
+    }
+  }
+  return signals.sort((a, b) => b.riskScore - a.riskScore);
+}
