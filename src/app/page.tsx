@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import UploadPanel from "@/components/UploadPanel";
 import { useAnalysis } from "@/context/AnalysisContext";
+import { computeMigration, toSnapshotCustomers } from "@/lib/aggregations";
 import { parseCustomerCsv } from "@/lib/csvParser";
 import { parseLendingPolicyPdf } from "@/lib/pdfParser";
 import {
@@ -12,7 +13,9 @@ import {
   RISK_THRESHOLDS,
 } from "@/lib/riskScoring";
 import { scoreCustomers } from "@/lib/riskScoring";
-import type { AnalysisResult } from "@/lib/types";
+import { getWorklist, saveSnapshotAndGetPrevious, saveWorklist } from "@/lib/storage";
+import type { AnalysisResult, PortfolioSnapshot } from "@/lib/types";
+import { seedWorklist } from "@/lib/worklist";
 
 export default function UploadPage() {
   const router = useRouter();
@@ -84,6 +87,23 @@ export default function UploadPage() {
         }
       }
 
+      // Persist this run as a snapshot (localStorage, client-side only) and
+      // compare against whatever was saved last time, so risk migration is
+      // computed from real prior data rather than simulated.
+      const analysedAt = new Date();
+      const snapshot: PortfolioSnapshot = {
+        analysedAt: analysedAt.toISOString(),
+        csvFileName: csvFile.name,
+        customers: toSnapshotCustomers(scored),
+      };
+      const previousSnapshot = saveSnapshotAndGetPrevious(snapshot);
+      const migration = computeMigration(scored, previousSnapshot);
+
+      // Auto-seed the intervention worklist with any newly-flagged Red/Amber
+      // customers, without disturbing existing entries' status or notes.
+      const existingWorklist = getWorklist();
+      saveWorklist(seedWorklist(existingWorklist, scored));
+
       const analysis: AnalysisResult = {
         customers: scored,
         rules,
@@ -91,9 +111,10 @@ export default function UploadPage() {
         csvFileName: csvFile.name,
         pdfFileName: pdfFile ? pdfFile.name : null,
         pdfPageCount,
-        analysedAt: new Date(),
+        analysedAt,
         isSampleData: isSampleSelected,
         pdfParseFailed,
+        migration,
       };
 
       setResult(analysis);

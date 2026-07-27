@@ -2,7 +2,16 @@
 // portfolio trend simulation, and recommended-action derivation.
 
 import { RISK_THRESHOLDS } from "./riskScoring";
-import type { RiskCategory, ScoredCustomer, TrendPoint } from "./types";
+import type {
+  MigrationResult,
+  MigrationTransition,
+  PolicyBreach,
+  PortfolioSnapshot,
+  RiskCategory,
+  ScoredCustomer,
+  SnapshotCustomer,
+  TrendPoint,
+} from "./types";
 
 export interface CategorySummary {
   category: RiskCategory;
@@ -92,8 +101,35 @@ export function generatePortfolioTrend(
   return trend;
 }
 
-export function recommendedActions(customers: ScoredCustomer[]): string[] {
+export function recommendedActions(
+  customers: ScoredCustomer[],
+  migration?: MigrationResult,
+  breaches?: PolicyBreach[]
+): string[] {
   const actions: string[] = [];
+
+  // Emerging risks from this period's movement and policy testing surface
+  // first — they're the freshest signal and the reason a CRO would open the
+  // dashboard today rather than last week.
+  if (migration?.hasPrevious) {
+    const worseningTransitions = migration.transitions.filter(
+      (t) =>
+        (t.from === "Amber" && t.to === "Red") ||
+        (t.from === "Green" && t.to === "Red") ||
+        (t.from === "Green" && t.to === "Amber")
+    );
+    for (const t of worseningTransitions) {
+      actions.push(
+        `${t.count} customer(s) migrated ${t.from} → ${t.to} since the last snapshot — review for early intervention before further deterioration.`
+      );
+    }
+  }
+
+  if (breaches) {
+    for (const b of breaches.filter((b) => b.severity === "breach")) {
+      actions.push(`Policy breach: ${b.detail}`);
+    }
+  }
 
   const summaries = summariseByCategory(customers);
   const redSummary = summaries.find((s) => s.category === "Red")!;
@@ -137,6 +173,146 @@ export function recommendedActions(customers: ScoredCustomer[]): string[] {
   }
 
   return actions;
+}
+
+// ---------------------------------------------------------------------------
+// Risk migration — compares the current scored portfolio against the most
+// recent previously-saved snapshot (see src/lib/storage.ts) so the dashboard
+// can report real Green/Amber/Red movement instead of a simulated trend.
+// ---------------------------------------------------------------------------
+
+export function toSnapshotCustomers(customers: ScoredCustomer[]): SnapshotCustomer[] {
+  return customers.map((c) => ({
+    customerId: c.customerId,
+    customerName: c.customerName,
+    industrySector: c.industrySector,
+    creditScore: c.creditScore,
+    repaymentStatus: c.repaymentStatus,
+    loanBalance: c.loanBalance,
+    riskScore: c.riskScore,
+    category: c.category,
+  }));
+}
+
+const CATEGORY_RANK: Record<RiskCategory, number> = { Green: 0, Amber: 1, Red: 2 };
+
+export function computeMigration(
+  currentCustomers: ScoredCustomer[],
+  previous: PortfolioSnapshot | null
+): MigrationResult {
+  if (!previous) {
+    return {
+      hasPrevious: false,
+      previousAnalysedAt: null,
+      transitions: [],
+      newCustomers: [],
+      droppedCustomerIds: [],
+      deterioratedCount: 0,
+      improvedCount: 0,
+      stableCount: 0,
+    };
+  }
+
+  const previousById = new Map(previous.customers.map((c) => [c.customerId, c]));
+  const currentIds = new Set(currentCustomers.map((c) => c.customerId));
+
+  const transitionMap = new Map<string, MigrationTransition>();
+  let deteriorated = 0;
+  let improved = 0;
+  let stable = 0;
+  const newCustomers: SnapshotCustomer[] = [];
+
+  for (const current of currentCustomers) {
+    const prior = previousById.get(current.customerId);
+    if (!prior) {
+      newCustomers.push({
+        customerId: current.customerId,
+        customerName: current.customerName,
+        industrySector: current.industrySector,
+        creditScore: current.creditScore,
+        repaymentStatus: current.repaymentStatus,
+        loanBalance: current.loanBalance,
+        riskScore: current.riskScore,
+        category: current.category,
+      });
+      continue;
+    }
+
+    const key = `${prior.category}->${current.category}`;
+    if (!transitionMap.has(key)) {
+      transitionMap.set(key, { from: prior.category, to: current.category, count: 0, customers: [] });
+    }
+    const transition = transitionMap.get(key)!;
+    transition.count += 1;
+    transition.customers.push({
+      customerId: current.customerId,
+      customerName: current.customerName,
+      industrySector: current.industrySector,
+      creditScore: current.creditScore,
+      repaymentStatus: current.repaymentStatus,
+      loanBalance: current.loanBalance,
+      riskScore: current.riskScore,
+      category: current.category,
+    });
+
+    const rankDelta = CATEGORY_RANK[current.category] - CATEGORY_RANK[prior.category];
+    if (rankDelta > 0) deteriorated += 1;
+    else if (rankDelta < 0) improved += 1;
+    else stable += 1;
+  }
+
+  const droppedCustomerIds = previous.customers
+    .filter((c) => !currentIds.has(c.customerId))
+    .map((c) => c.customerId);
+
+  return {
+    hasPrevious: true,
+    previousAnalysedAt: previous.analysedAt,
+    transitions: Array.from(transitionMap.values()).sort((a, b) => b.count - a.count),
+    newCustomers,
+    droppedCustomerIds,
+    deterioratedCount: deteriorated,
+    improvedCount: improved,
+    stableCount: stable,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Rationale — a short, deterministic explanation of what's driving a
+// customer's risk score, built from the three weighted factor contributions.
+// ---------------------------------------------------------------------------
+
+export function buildRationale(customer: ScoredCustomer): string {
+  const contributions = [
+    {
+      label: `credit score of ${customer.creditScore}`,
+      value: customer.creditScoreFactor,
+      weight: "credit",
+    },
+    {
+      label: `repayment status "${customer.repaymentStatus}"`,
+      value: customer.repaymentRiskFactor,
+      weight: "repayment",
+    },
+    {
+      label: `exposure of ${new Intl.NumberFormat("en-AU", {
+        style: "currency",
+        currency: "AUD",
+        notation: "compact",
+        maximumFractionDigits: 1,
+      }).format(customer.loanBalance)}`,
+      value: customer.exposureFactor,
+      weight: "exposure",
+    },
+  ].sort((a, b) => b.value - a.value);
+
+  const [top, second] = contributions;
+
+  if (customer.category === "Green" && top.value < 40) {
+    return `Low risk overall — ${top.label} and ${second.label} are both within normal ranges.`;
+  }
+
+  return `Driven primarily by ${top.label} (factor ${top.value.toFixed(0)}), with ${second.label} (factor ${second.value.toFixed(0)}) adding further weight.`;
 }
 
 export { RISK_THRESHOLDS };

@@ -1,13 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
-  Line,
-  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -15,18 +14,26 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import CustomerDrilldown from "@/components/CustomerDrilldown";
+import InterventionWorklist from "@/components/InterventionWorklist";
+import MigrationMatrix from "@/components/MigrationMatrix";
+import PolicyBreachPanel from "@/components/PolicyBreachPanel";
 import RiskBadge from "@/components/RiskBadge";
+import ScenarioPanel from "@/components/ScenarioPanel";
 import { useAnalysis } from "@/context/AnalysisContext";
 import {
+  buildRationale,
   exposureByIndustry,
-  generatePortfolioTrend,
   recommendedActions,
   summariseByCategory,
   topRiskCustomers,
   totalExposure,
 } from "@/lib/aggregations";
+import { detectPolicyBreaches } from "@/lib/policyBreaches";
 import { RISK_THRESHOLDS } from "@/lib/riskScoring";
-import type { RiskCategory } from "@/lib/types";
+import { getWorklist, saveWorklist } from "@/lib/storage";
+import type { RiskCategory, WorklistItem } from "@/lib/types";
+import { seedWorklist } from "@/lib/worklist";
 
 // NAB brand palette: risk categories keep semantic green/amber, but Red now
 // shares the NAB brand red family instead of a generic red, so "High Risk"
@@ -95,6 +102,19 @@ function CategoryLegend() {
 
 export default function DashboardPage() {
   const { result } = useAnalysis();
+  const [worklist, setWorklist] = useState<WorklistItem[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setWorklist(getWorklist());
+  }, [result]);
+
+  const customers = useMemo(() => result?.customers ?? [], [result]);
+
+  const breaches = useMemo(
+    () => (result ? detectPolicyBreaches(result.rules, customers) : []),
+    [result, customers]
+  );
 
   if (!result) {
     return (
@@ -110,18 +130,26 @@ export default function DashboardPage() {
     );
   }
 
-  const { customers, rules, csvFileName, pdfFileName, pdfPageCount, analysedAt, isSampleData, pdfParseFailed } = result;
+  const { rules, csvFileName, pdfFileName, pdfPageCount, analysedAt, isSampleData, pdfParseFailed, migration, weights } =
+    result;
 
   const categorySummaries = summariseByCategory(customers);
   const exposure = totalExposure(customers);
   const industryData = exposureByIndustry(customers);
-  const currentAverage =
-    customers.length > 0
-      ? customers.reduce((sum, c) => sum + c.riskScore, 0) / customers.length
-      : 0;
-  const trend = generatePortfolioTrend(currentAverage);
   const top10 = topRiskCustomers(customers, 10);
-  const actions = recommendedActions(customers);
+  const actions = recommendedActions(customers, migration, breaches);
+  const industries = Array.from(new Set(customers.map((c) => c.industrySector))).sort();
+  const selectedCustomer = customers.find((c) => c.customerId === selectedCustomerId) ?? null;
+
+  function handleWorklistChange(items: WorklistItem[]) {
+    setWorklist(items);
+  }
+
+  function handleSyncWorklist() {
+    const merged = seedWorklist(worklist, customers);
+    setWorklist(merged);
+    saveWorklist(merged);
+  }
 
   const categoryChartData = categorySummaries.map((s) => ({
     category: s.category,
@@ -148,8 +176,24 @@ export default function DashboardPage() {
         {analysedDate}, {analysedTime}
       </p>
 
-      {/* 2. Category KPI cards */}
-      <div className="mt-6 grid gap-4 sm:grid-cols-3">
+      {/* 2. Recommended Actions — moved to top: this is what a CRO needs first */}
+      <div className="mt-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+        <h2 className="text-sm font-semibold text-[var(--foreground)]">Recommended Actions</h2>
+        <p className="mt-1 text-xs text-[var(--muted)]">
+          Auto-generated from this period&rsquo;s risk migration, policy breach testing, and portfolio composition.
+        </p>
+        <ul className="mt-3 space-y-2">
+          {actions.map((action, i) => (
+            <li key={i} className="flex gap-2 text-sm text-[var(--foreground)]">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
+              <span>{action}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* 3. Category KPI cards */}
+      <div className="mt-4 grid gap-4 sm:grid-cols-3">
         {categorySummaries.map((s) => (
           <div key={s.category} className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
             <div className="flex items-center gap-2">
@@ -164,13 +208,13 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* 3. Total exposure */}
+      {/* 4. Total exposure */}
       <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
         <p className="text-sm font-medium text-[var(--muted)]">Total Portfolio Exposure</p>
         <p className="mt-1 text-3xl font-semibold text-[var(--foreground)]">{formatFullCurrency(exposure)}</p>
       </div>
 
-      {/* 4. Two-column chart row */}
+      {/* 5. Two-column chart row */}
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-[var(--foreground)]">Customers &amp; Exposure by Risk Category</h2>
@@ -236,58 +280,45 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 5. Trend chart */}
-      <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
-        <h2 className="text-sm font-semibold text-[var(--foreground)]">Portfolio Risk Trend</h2>
-        <p className="text-xs text-[var(--muted)]">Illustrative trend leading up to current position</p>
-        <div className="mt-3 h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={trend}>
-              <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 12 }} stroke="var(--muted)" />
-              <YAxis tick={{ fontSize: 12 }} stroke="var(--muted)" domain={[0, 100]} />
-              <Tooltip />
-              <Line
-                type="monotone"
-                dataKey="averageRiskScore"
-                name="Average Risk Score"
-                stroke="var(--accent)"
-                strokeWidth={2}
-                dot={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
+      {/* 6. Risk migration + policy breach detection — real data, not illustrative */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <MigrationMatrix migration={migration} />
+        <PolicyBreachPanel breaches={breaches} pdfFileName={pdfFileName} />
       </div>
 
-      {/* 6. Top 10 table */}
+      {/* 7. Top 10 table, now with rationale and click-through to drill-down */}
       <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
         <h2 className="text-sm font-semibold text-[var(--foreground)]">Top 10 Highest-Risk Customers</h2>
+        <p className="mt-1 text-xs text-[var(--muted)]">Click a customer for the full risk profile.</p>
         <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left text-sm">
+          <table className="w-full min-w-[820px] text-left text-sm">
             <thead>
               <tr className="border-b border-[var(--border)] text-xs uppercase tracking-wide text-[var(--muted)]">
                 <th className="py-2 pr-3">Customer</th>
                 <th className="py-2 pr-3">Industry</th>
-                <th className="py-2 pr-3">Credit Score</th>
-                <th className="py-2 pr-3">Repayment Status</th>
                 <th className="py-2 pr-3">Loan Balance</th>
                 <th className="py-2 pr-3">Risk Score</th>
                 <th className="py-2 pr-3">Category</th>
+                <th className="py-2 pr-3">Rationale</th>
               </tr>
             </thead>
             <tbody>
               {top10.map((c) => (
-                <tr key={c.customerId} className="border-b border-[var(--border)] last:border-0">
-                  <td className="py-2 pr-3 font-medium text-[var(--foreground)]">{c.customerName}</td>
+                <tr
+                  key={c.customerId}
+                  onClick={() => setSelectedCustomerId(c.customerId)}
+                  className="cursor-pointer border-b border-[var(--border)] last:border-0 hover:bg-[var(--background)]"
+                >
+                  <td className="py-2 pr-3 font-medium text-[var(--accent)] underline-offset-2 hover:underline">
+                    {c.customerName}
+                  </td>
                   <td className="py-2 pr-3 text-[var(--muted)]">{c.industrySector}</td>
-                  <td className="py-2 pr-3 text-[var(--muted)]">{c.creditScore}</td>
-                  <td className="py-2 pr-3 text-[var(--muted)]">{c.repaymentStatus}</td>
                   <td className="py-2 pr-3 text-[var(--muted)]">{formatFullCurrency(c.loanBalance)}</td>
                   <td className="py-2 pr-3 text-[var(--muted)]">{c.riskScore}</td>
                   <td className="py-2 pr-3">
                     <RiskBadge category={c.category} />
                   </td>
+                  <td className="py-2 pr-3 text-xs text-[var(--muted)]">{buildRationale(c)}</td>
                 </tr>
               ))}
             </tbody>
@@ -295,71 +326,88 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 7. Bottom row */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-[var(--foreground)]">Recommended Actions</h2>
-          <ul className="mt-3 space-y-2">
-            {actions.map((action, i) => (
-              <li key={i} className="flex gap-2 text-sm text-[var(--foreground)]">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
-                <span>{action}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+      {/* 8. Intervention worklist */}
+      <div className="mt-4">
+        <InterventionWorklist
+          items={worklist}
+          onChange={handleWorklistChange}
+          onSelectCustomer={setSelectedCustomerId}
+        />
+        {worklist.length === 0 && (
+          <button
+            type="button"
+            onClick={handleSyncWorklist}
+            className="mt-2 text-xs text-[var(--accent)] underline-offset-2 hover:underline"
+          >
+            Populate worklist from current Red/Amber customers
+          </button>
+        )}
+      </div>
 
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-[var(--foreground)]">Scoring Methodology</h2>
-          <p className="mt-2 text-sm text-[var(--foreground)]">
-            Risk Score = (Credit Risk Weight × Credit Score Factor) + (Repayment Risk Weight ×
-            Repayment Status Factor) + (Exposure Weight × Loan Balance Factor)
-          </p>
-          <p className="mt-2 text-xs text-[var(--muted)]">
-            Green 0–{RISK_THRESHOLDS.greenMax} · Amber {RISK_THRESHOLDS.greenMax + 1}–
-            {RISK_THRESHOLDS.amberMax} · Red {RISK_THRESHOLDS.amberMax + 1}–100
-          </p>
+      {/* 9. Scenario / stress testing */}
+      <div className="mt-4">
+        <ScenarioPanel customers={customers} weights={weights} industries={industries} />
+      </div>
 
-          <div className="mt-4 border-t border-[var(--border)] pt-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-              Extracted Policy Highlights
-            </h3>
-            {pdfFileName ? (
-              pdfParseFailed ? (
-                <p className="mt-2 text-sm text-[var(--muted)]">
-                  Could not extract text from {pdfFileName}.
-                </p>
-              ) : (
-                <>
-                  <p className="mt-2 text-xs text-[var(--muted)]">
-                    Heuristic extraction from {pdfFileName} — {pdfPageCount ?? 0} page(s) scanned.
-                  </p>
-                  {rules.length > 0 ? (
-                    <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto pr-1">
-                      {rules.map((rule, i) => (
-                        <li
-                          key={i}
-                          className="border-l-2 border-[var(--accent)] pl-2 text-sm text-[var(--foreground)]"
-                        >
-                          {rule.text}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-sm text-[var(--muted)]">
-                      No rule statements were identified in this document.
-                    </p>
-                  )}
-                </>
-              )
-            ) : (
+      {/* 10. Scoring methodology + extracted policy highlights */}
+      <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-sm">
+        <h2 className="text-sm font-semibold text-[var(--foreground)]">Scoring Methodology</h2>
+        <p className="mt-2 text-sm text-[var(--foreground)]">
+          Risk Score = (Credit Risk Weight × Credit Score Factor) + (Repayment Risk Weight ×
+          Repayment Status Factor) + (Exposure Weight × Loan Balance Factor)
+        </p>
+        <p className="mt-2 text-xs text-[var(--muted)]">
+          Green 0–{RISK_THRESHOLDS.greenMax} · Amber {RISK_THRESHOLDS.greenMax + 1}–
+          {RISK_THRESHOLDS.amberMax} · Red {RISK_THRESHOLDS.amberMax + 1}–100
+        </p>
+
+        <div className="mt-4 border-t border-[var(--border)] pt-4">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+            Extracted Policy Highlights
+          </h3>
+          {pdfFileName ? (
+            pdfParseFailed ? (
               <p className="mt-2 text-sm text-[var(--muted)]">
-                No policy PDF was uploaded, so no rules were extracted for this analysis.
+                Could not extract text from {pdfFileName}.
               </p>
-            )}
-          </div>
+            ) : (
+              <>
+                <p className="mt-2 text-xs text-[var(--muted)]">
+                  Heuristic extraction from {pdfFileName} — {pdfPageCount ?? 0} page(s) scanned.
+                </p>
+                {rules.length > 0 ? (
+                  <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto pr-1">
+                    {rules.map((rule, i) => (
+                      <li
+                        key={i}
+                        className="border-l-2 border-[var(--accent)] pl-2 text-sm text-[var(--foreground)]"
+                      >
+                        {rule.text}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-sm text-[var(--muted)]">
+                    No rule statements were identified in this document.
+                  </p>
+                )}
+              </>
+            )
+          ) : (
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              No policy PDF was uploaded, so no rules were extracted for this analysis.
+            </p>
+          )}
         </div>
       </div>
+
+      {selectedCustomer && (
+        <CustomerDrilldown
+          customer={selectedCustomer}
+          breaches={breaches}
+          onClose={() => setSelectedCustomerId(null)}
+        />
+      )}
     </div>
   );
 }
