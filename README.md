@@ -11,14 +11,25 @@ CSV into an executive risk dashboard — entirely client-side, no backend.
 2. **Run Analysis** parses the CSV, scores every customer with a weighted
    risk formula, and heuristically extracts key policy rules from the PDF
    (keyword matching — no external AI calls).
-3. **Executive Dashboard** (`/dashboard`) shows customers and exposure by
-   risk category, total portfolio exposure, exposure by industry, a
-   portfolio risk trend, the top 10 highest-risk customers, recommended
-   actions, and the scoring methodology.
+3. **Executive Dashboard** (`/dashboard`) shows, in order: recommended
+   actions (auto-generated from this period's risk migration and policy
+   breaches), customers and exposure by risk category, total exposure,
+   exposure by industry, a real Green/Amber/Red **risk migration matrix**
+   comparing this analysis to the last one, **policy breach detection**
+   (numeric thresholds parsed from the PDF and tested against the actual
+   portfolio), the top 10 highest-risk customers with a rationale for each
+   score, an **intervention worklist** (assignable owner, due date, status,
+   action log), a **scenario/stress-testing** panel, and the scoring
+   methodology.
+4. Clicking any customer opens a **drill-down panel**: factor-level score
+   breakdown, real historical score/exposure trend, and which policy rules
+   they trigger.
 
-All processing happens in the browser. No files are uploaded to a server, no
-data is persisted, and there is no authentication — this is a prototype for
-internal review only.
+All processing happens in the browser — no backend, no server-side database,
+no authentication. Analysis snapshots and the intervention worklist are
+saved to the browser's own `localStorage` (not sent anywhere) so risk
+migration and the worklist audit trail persist across page reloads; this is
+still a prototype for internal review only.
 
 ## Running locally
 
