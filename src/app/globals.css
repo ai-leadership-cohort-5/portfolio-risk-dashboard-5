@@ -1,19 +1,23 @@
+@import url('https://fonts.googleapis.com/css2?family=Epilogue:wght@500;700;800;900&family=Source+Sans+3:ital,wght@0,300;0,400;0,600;0,700;1,400&display=swap');
 @import "tailwindcss";
 
 :root {
-  --background: #f6f7f9;
+  --background: #f5f5f5;
   --surface: #ffffff;
-  --foreground: #1a2027;
-  --muted: #5b6572;
-  --border: #e2e5e9;
-  --accent: #2c5a8c;
-  --accent-dark: #1f4267;
-  --risk-green: #2f7d4f;
-  --risk-green-bg: #eaf5ee;
-  --risk-amber: #b5720f;
-  --risk-amber-bg: #fdf3e2;
-  --risk-red: #b13030;
-  --risk-red-bg: #fbeaea;
+  --foreground: #1a1a1a;
+  --muted: #4d4d4d;
+  --border: #e6e6e6;
+  --accent: #ed0000;
+  --accent-dark: #b30000;
+  --risk-green: #166534;
+  --risk-green-bg: #dcfce7;
+  --risk-amber: #92400e;
+  --risk-amber-bg: #fef3c7;
+  --risk-red: #b30000;
+  --risk-red-bg: #fceaea;
+  --font-heading: "Epilogue", system-ui, -apple-system, sans-serif;
+  --font-body: "Source Sans 3", "Segoe UI", -apple-system, BlinkMacSystemFont,
+    Roboto, Helvetica, Arial, sans-serif;
 }
 
 @theme inline {
@@ -35,6 +39,11 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-    Arial, sans-serif;
+  font-family: var(--font-body);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-heading);
 }

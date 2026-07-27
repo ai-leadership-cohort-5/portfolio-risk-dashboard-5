@@ -28,23 +28,28 @@ import {
 import { RISK_THRESHOLDS } from "@/lib/riskScoring";
 import type { RiskCategory } from "@/lib/types";
 
+// NAB brand palette: risk categories keep semantic green/amber, but Red now
+// shares the NAB brand red family instead of a generic red, so "High Risk"
+// reads as the same red used across the rest of the NAB-branded UI.
 const CATEGORY_COLOURS: Record<RiskCategory, string> = {
-  Green: "#2f7d4f",
-  Amber: "#b5720f",
-  Red: "#b13030",
+  Green: "#22c55e",
+  Amber: "#f59e0b",
+  Red: "#ed0000",
 };
 
-const EXPOSURE_COLOUR = "#333a42";
+const EXPOSURE_COLOUR = "#1a1a1a";
 
+// Black → NAB red → grey qualitative palette (replaces the previous blue-grey
+// scale, which no longer matches the brand accent).
 const INDUSTRY_PALETTE = [
-  "#1f4267",
-  "#2c5a8c",
-  "#4a7ab0",
-  "#7098c2",
-  "#9db8d6",
-  "#5b6572",
-  "#8b95a1",
-  "#b8c0c9",
+  "#1a1a1a",
+  "#ed0000",
+  "#737373",
+  "#b30000",
+  "#a6a6a6",
+  "#4d4d4d",
+  "#e08080",
+  "#cccccc",
 ];
 
 function formatCompactCurrency(value: number): string {

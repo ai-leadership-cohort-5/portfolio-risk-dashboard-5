@@ -21,7 +21,10 @@ export default function NavBar() {
               <div className="absolute inset-[6px] rounded-sm bg-[var(--surface)]" />
             </div>
             <div>
-              <div className="text-sm font-semibold leading-tight text-[var(--foreground)]">
+              <div
+                className="text-sm font-bold leading-tight text-[var(--foreground)]"
+                style={{ fontFamily: "var(--font-heading)" }}
+              >
                 Portfolio Risk Dashboard
               </div>
               <div className="text-xs leading-tight text-[var(--muted)]">
